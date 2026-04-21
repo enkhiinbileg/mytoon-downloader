@@ -1,0 +1,11 @@
+# Ignore manga downloads
+Chapter */
+Chapter*/
+downloads/
+__pycache__/
+*.ico
+*.png
+!logo.png
+!logo.ico
+node_modules/
+.venv/
