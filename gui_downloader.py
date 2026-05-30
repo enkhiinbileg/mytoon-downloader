@@ -44,7 +44,8 @@ class WebtoonDownloaderGUI(ctk.CTk):
         # Downloader Paths
         self.downloader_path = r"C:\Users\Gavl\AppData\Roaming\Python\Python314\Scripts\webtoon-downloader.exe"
         self.gallery_dl_path = r"C:\Users\Gavl\AppData\Roaming\Python\Python314\Scripts\gallery-dl.exe"
-        self.direct_scraper_domains = ("manhuaus.com",)
+        self.direct_scraper_domains = ("manhuaus.com", "mgeko.cc", "asurascans.com", "hentai20.io")
+        self.supported_sites_window = None
         
         # Grid layout (1x2)
         self.grid_columnconfigure(1, weight=1)
@@ -138,6 +139,13 @@ class WebtoonDownloaderGUI(ctk.CTk):
                                           hover_color="#333333", border_width=1, border_color="#444444")
         self.browse_button.pack(side="right")
 
+        self.supported_sites_button = ctk.CTkButton(self.sidebar_frame, text="ДЭМЖДЭГ САЙТУУД", height=38, corner_radius=8,
+                                                   command=self.show_supported_sites,
+                                                   fg_color="#222222", hover_color="#333333",
+                                                   border_width=1, border_color=self.UCHIHA_RED,
+                                                   text_color=self.UCHIHA_TEXT)
+        self.supported_sites_button.grid(row=8, column=0, padx=25, pady=(5, 10), sticky="ew")
+
         # 2. MAIN CONTENT
         self.main_frame = ctk.CTkFrame(self, corner_radius=20, fg_color="#080808")
         self.main_frame.grid(row=0, column=1, padx=25, pady=25, sticky="nsew")
@@ -157,6 +165,14 @@ class WebtoonDownloaderGUI(ctk.CTk):
                                             fg_color=self.UCHIHA_RED, hover_color=self.UCHIHA_DARK_RED,
                                             corner_radius=12)
         self.download_button.pack(side="right")
+
+        self.supported_sites_header_button = ctk.CTkButton(self.header_frame, text="ДЭМЖДЭГ САЙТУУД", height=42, width=170,
+                                                           command=self.show_supported_sites,
+                                                           font=ctk.CTkFont(size=13, weight="bold"),
+                                                           fg_color="#222222", hover_color="#333333",
+                                                           border_width=1, border_color=self.UCHIHA_RED,
+                                                           corner_radius=10)
+        self.supported_sites_header_button.pack(side="right", padx=(0, 12))
 
         # Progress Analytics
         self.analytics_frame = ctk.CTkFrame(self.main_frame, fg_color="transparent")
@@ -215,6 +231,95 @@ class WebtoonDownloaderGUI(ctk.CTk):
         if folder:
             self.path_entry.delete(0, "end")
             self.path_entry.insert(0, folder)
+
+    def show_supported_sites(self):
+        if self.supported_sites_window and self.supported_sites_window.winfo_exists():
+            self.supported_sites_window.focus()
+            return
+
+        window = ctk.CTkToplevel(self)
+        window.title("Дэмждэг сайтууд")
+        window.geometry("720x520")
+        window.configure(fg_color="#050505")
+        window.grid_columnconfigure(0, weight=1)
+        window.grid_rowconfigure(1, weight=1)
+        self.supported_sites_window = window
+
+        header = ctk.CTkLabel(window, text="Зураг таталт шалгагдсан сайтууд",
+                              font=ctk.CTkFont(size=22, weight="bold"),
+                              text_color=self.UCHIHA_RED)
+        header.grid(row=0, column=0, padx=24, pady=(22, 10), sticky="w")
+
+        content = ctk.CTkScrollableFrame(window, fg_color="#0A0A0A", corner_radius=12)
+        content.grid(row=1, column=0, padx=24, pady=(0, 18), sticky="nsew")
+        content.grid_columnconfigure(0, weight=1)
+
+        sites = [
+            {
+                "name": "WEBTOONS",
+                "domain": "webtoons.com",
+                "status": "Асуудалгүй: official Webtoons downloader ашиглана.",
+                "range": "Start / End chapter range дэмжинэ.",
+                "example": "https://www.webtoons.com/en/...",
+            },
+            {
+                "name": "MANHUAUS",
+                "domain": "manhuaus.com",
+                "status": "Асуудалгүй шалгасан: chapter 87 дээр 63 зураг татсан.",
+                "range": "chapter-20 ... chapter-40 хэлбэрийн range дэмжинэ.",
+                "example": "https://manhuaus.com/manga/.../chapter-87/",
+            },
+            {
+                "name": "Mgeko",
+                "domain": "mgeko.cc",
+                "status": "Асуудалгүй шалгасан: chapter 1-3 range татсан.",
+                "range": "chapter-1-eng-li ... chapter-40-eng-li хэлбэрийн range дэмжинэ.",
+                "example": "https://www.mgeko.cc/reader/en/...-chapter-1-eng-li/",
+            },
+            {
+                "name": "Asura Scans",
+                "domain": "asurascans.com",
+                "status": "Асуудалгүй шалгасан: chapter 195 дээр 14 зураг татсан.",
+                "range": "chapter/195 хэлбэрийн chapter URL дэмжинэ.",
+                "example": "https://asurascans.com/comics/.../chapter/195",
+            },
+            {
+                "name": "Hentai20",
+                "domain": "hentai20.io",
+                "status": "Асуудалгүй шалгасан: chapter 1 дээр 10 зураг татсан.",
+                "range": "chapter-1 хэлбэрийн chapter URL дэмжинэ.",
+                "example": "https://hentai20.io/...-chapter-1/",
+            },
+            {
+                "name": "Universal fallback",
+                "domain": "Бусад manga/manhwa сайтууд",
+                "status": "Туршиж үзнэ: site бүр дээр 100% баталгаатай биш.",
+                "range": "URL pattern тохирвол Start / End ажиллана.",
+                "example": "Madara/reader image-тэй сайтууд",
+            },
+        ]
+
+        for row, site in enumerate(sites):
+            card = ctk.CTkFrame(content, fg_color="#151515", corner_radius=8,
+                                border_width=1, border_color="#252525")
+            card.grid(row=row, column=0, padx=12, pady=8, sticky="ew")
+            card.grid_columnconfigure(0, weight=1)
+
+            title = ctk.CTkLabel(card, text=f"{site['name']}  |  {site['domain']}",
+                                 font=ctk.CTkFont(size=16, weight="bold"),
+                                 text_color="white", anchor="w")
+            title.grid(row=0, column=0, padx=16, pady=(12, 4), sticky="ew")
+
+            body_text = f"{site['status']}\n{site['range']}\nЖишээ: {site['example']}"
+            body = ctk.CTkLabel(card, text=body_text, justify="left", anchor="w",
+                                font=ctk.CTkFont(size=13), text_color="#C8C8C8",
+                                wraplength=620)
+            body.grid(row=1, column=0, padx=16, pady=(0, 12), sticky="ew")
+
+        close_button = ctk.CTkButton(window, text="ХААХ", width=120, height=34,
+                                     command=window.destroy, fg_color=self.UCHIHA_RED,
+                                     hover_color=self.UCHIHA_DARK_RED)
+        close_button.grid(row=2, column=0, padx=24, pady=(0, 18), sticky="e")
 
     def verify_url(self):
         url = "".join(self.url_entry.get().split())
@@ -288,15 +393,16 @@ class WebtoonDownloaderGUI(ctk.CTk):
             self.current_total_chapters = 1
 
         is_webtoons = "webtoons.com" in url.lower()
+        is_webtoons_viewer = self.is_webtoons_viewer_url(url)
         is_direct_scraper = self.should_use_direct_scraper(url)
         
-        if is_webtoons:
+        if is_webtoons and not is_webtoons_viewer:
             args = [self.downloader_path, url]
             if start_str: args.extend(["--start", start_str])
             if end_str: args.extend(["--end", end_str])
             if save_as != "images": args.extend(["--save-as", save_as])
             if save_path: args.extend(["--out", save_path])
-        elif is_direct_scraper:
+        elif is_direct_scraper or is_webtoons_viewer:
             args = ["direct-scraper", url]
         else:
             args = [self.gallery_dl_path, url]
@@ -347,9 +453,52 @@ class WebtoonDownloaderGUI(ctk.CTk):
         host = urlparse(url).netloc.lower()
         return any(host == domain or host.endswith("." + domain) for domain in self.direct_scraper_domains)
 
+    def is_webtoons_viewer_url(self, url):
+        parsed = urlparse(url)
+        return "webtoons.com" in parsed.netloc.lower() and ("/viewer" in parsed.path.lower() or "episode_no=" in parsed.query.lower())
+
     def extract_chapter_number(self, url):
-        match = re.search(r"/chapter[/-](\d+)(?:[/?#]|$)", url, flags=re.IGNORECASE)
+        match = re.search(r"(?:/|-)chapter[/-](\d+)(?:[/?#-]|$)", url, flags=re.IGNORECASE)
+        if match:
+            return int(match.group(1))
+        match = re.search(r"[?&]episode_no=(\d+)(?:&|$)", url, flags=re.IGNORECASE)
         return int(match.group(1)) if match else None
+
+    def build_chapter_url_patterns(self, url, base_url, ch_num):
+        patterns = []
+        if self.extract_chapter_number(url):
+            replaced_url = re.sub(
+                r"(?i)(chapter[/-])\d+",
+                lambda match: f"{match.group(1)}{ch_num}",
+                url,
+                count=1,
+            )
+            replaced_url = re.sub(
+                r"(?i)([?&]episode_no=)\d+",
+                lambda match: f"{match.group(1)}{ch_num}",
+                replaced_url,
+                count=1,
+            )
+            replaced_url = re.sub(
+                r"(?i)(/ep-)\d+",
+                lambda match: f"{match.group(1)}{ch_num}",
+                replaced_url,
+                count=1,
+            )
+            patterns.append(replaced_url)
+
+        patterns.extend([
+            f"{base_url}chapter-{ch_num}/",
+            f"{base_url}chapter/{ch_num}/",
+            f"{base_url}ch-{ch_num}/",
+            f"{base_url}chapter-{ch_num}-eng-li/",
+        ])
+
+        unique_patterns = []
+        for pattern in patterns:
+            if pattern not in unique_patterns:
+                unique_patterns.append(pattern)
+        return unique_patterns
 
     def normalize_image_url(self, raw_url, page_url):
         if not raw_url:
@@ -372,12 +521,13 @@ class WebtoonDownloaderGUI(ctk.CTk):
             img.get("data-src-optimized"),
             img.get("data-original"),
             img.get("data-original-src"),
+            img.get("data-url"),
             img.get("src"),
             img.get("srcset"),
         ]
         for p_src in possible_srcs:
             src = self.normalize_image_url(p_src, page_url)
-            if src and src.startswith("http") and not any(x in src.lower() for x in ["logo", "banner", "button", "avatar", "icon"]):
+            if src and src.startswith("http") and not any(x in src.lower() for x in ["logo", "banner", "button", "avatar", "icon", "readerarea", ".svg"]):
                 return src
         return None
 
@@ -389,6 +539,15 @@ class WebtoonDownloaderGUI(ctk.CTk):
             ".wp-manga-chapter-img img",
             ".chapter-content img",
             ".entry-content img",
+            "#chapter-reader img",
+            ".chapter-reader img",
+            ".reader-area img",
+            ".container-chapter-reader img",
+            "#_imageList img",
+            ".viewer_img img",
+            ".viewer_lst img",
+            "img._images",
+            "img[alt^='Page ']",
         ]
         image_urls = []
         seen = set()
@@ -421,6 +580,7 @@ class WebtoonDownloaderGUI(ctk.CTk):
             
             # Universal Chapter Stripping: handles /chapter-1/ and /chapter/1/
             base_url = re.sub(r"chapter[/-]\d+/?$", "", url, flags=re.IGNORECASE).rstrip("/")
+            base_url = re.sub(r"chapter-\d+[^/]*?/?$", "", base_url, flags=re.IGNORECASE).rstrip("-/") + "/"
             if not base_url.endswith("/") and not base_url.endswith("-"): base_url += "/"
             
             total_chapters = end - start + 1
@@ -428,14 +588,8 @@ class WebtoonDownloaderGUI(ctk.CTk):
 
             with httpx.Client(headers=headers, follow_redirects=True, timeout=30.0) as client:
                 for idx, ch_num in enumerate(range(start, end + 1)):
-                    # Try different URL patterns
-                    ch_url_patterns = [
-                        f"{base_url}chapter-{ch_num}/",
-                        f"{base_url}chapter/{ch_num}/",
-                        f"{base_url}ch-{ch_num}/"
-                    ]
-                    if self.extract_chapter_number(url) == ch_num:
-                        ch_url_patterns.insert(0, url)
+                    # Try original-site pattern first, then common fallback patterns.
+                    ch_url_patterns = self.build_chapter_url_patterns(url, base_url, ch_num)
                     
                     found = False
                     for ch_url in ch_url_patterns:
@@ -474,7 +628,7 @@ class WebtoonDownloaderGUI(ctk.CTk):
                                         break
                         except: continue
                     
-                    if not found or "asura" in url.lower():
+                    if not found:
                         if sync_playwright:
                             self.after(0, lambda: self.log("Playwright (Advanced) горим идэвхжлээ..."))
                             found = self.run_playwright_scraper(ch_url, ch_num, save_path)
