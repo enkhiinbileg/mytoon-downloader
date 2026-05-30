@@ -5,6 +5,7 @@ import re
 import httpx
 import io
 import ctypes
+from urllib.parse import urljoin, urlparse
 from bs4 import BeautifulSoup
 import customtkinter as ctk
 from tkinter import messagebox, filedialog
@@ -43,6 +44,7 @@ class WebtoonDownloaderGUI(ctk.CTk):
         # Downloader Paths
         self.downloader_path = r"C:\Users\Gavl\AppData\Roaming\Python\Python314\Scripts\webtoon-downloader.exe"
         self.gallery_dl_path = r"C:\Users\Gavl\AppData\Roaming\Python\Python314\Scripts\gallery-dl.exe"
+        self.direct_scraper_domains = ("manhuaus.com",)
         
         # Grid layout (1x2)
         self.grid_columnconfigure(1, weight=1)
@@ -271,15 +273,22 @@ class WebtoonDownloaderGUI(ctk.CTk):
         save_as = self.format_combo.get()
         save_path = self.path_entry.get().strip()
 
+        chapter_from_url = self.extract_chapter_number(url)
+
         try:
-            self.current_start_ch = int(start_str) if start_str else 1
+            if chapter_from_url and (not start_str or start_str == "1") and not end_str:
+                self.current_start_ch = chapter_from_url
+            else:
+                self.current_start_ch = int(start_str) if start_str else (chapter_from_url or 1)
             self.current_end_ch = int(end_str) if end_str and end_str.isdigit() else self.current_start_ch
             self.current_total_chapters = self.current_end_ch - self.current_start_ch + 1
         except:
-            self.current_start_ch = 1
+            self.current_start_ch = chapter_from_url or 1
+            self.current_end_ch = self.current_start_ch
             self.current_total_chapters = 1
 
         is_webtoons = "webtoons.com" in url.lower()
+        is_direct_scraper = self.should_use_direct_scraper(url)
         
         if is_webtoons:
             args = [self.downloader_path, url]
@@ -287,9 +296,11 @@ class WebtoonDownloaderGUI(ctk.CTk):
             if end_str: args.extend(["--end", end_str])
             if save_as != "images": args.extend(["--save-as", save_as])
             if save_path: args.extend(["--out", save_path])
+        elif is_direct_scraper:
+            args = ["direct-scraper", url]
         else:
             args = [self.gallery_dl_path, url]
-            if "manhwa" in url or "manhwa" in url:
+            if "manhwa" in url.lower() or "manhua" in url.lower():
                 args.extend(["-o", "extractor.madara.domain=" + url.split("/")[2]])
             if start_str or end_str:
                 args.extend(["--range", f"{start_str if start_str else ''}-{end_str if end_str else ''}"])
@@ -306,7 +317,7 @@ class WebtoonDownloaderGUI(ctk.CTk):
         url = args[1]
         is_webtoons = "webtoons.com" in url.lower()
         try:
-            if not is_webtoons and ("manhwa" in url or "manhwa" in url):
+            if args[0] == "direct-scraper" or (not is_webtoons and self.should_use_direct_scraper(url)):
                 self.run_madara_scraper(url)
                 return
 
@@ -324,16 +335,89 @@ class WebtoonDownloaderGUI(ctk.CTk):
                 self.after(0, lambda: self.log("Үндсэн систем амжилтгүй. Нөөц системээр оролдож байна..."))
                 self.run_madara_scraper(url)
         except Exception as e:
-            self.after(0, lambda: messagebox.showerror("Системийн алдаа", str(e)))
+            if not is_webtoons:
+                self.after(0, lambda err=str(e): self.log(f"Universal fallback: {err}"))
+                self.run_madara_scraper(url)
+            else:
+                self.after(0, lambda: messagebox.showerror("Системийн алдаа", str(e)))
         finally:
             self.after(0, self.reset_ui)
+
+    def should_use_direct_scraper(self, url):
+        host = urlparse(url).netloc.lower()
+        return any(host == domain or host.endswith("." + domain) for domain in self.direct_scraper_domains)
+
+    def extract_chapter_number(self, url):
+        match = re.search(r"/chapter[/-](\d+)(?:[/?#]|$)", url, flags=re.IGNORECASE)
+        return int(match.group(1)) if match else None
+
+    def normalize_image_url(self, raw_url, page_url):
+        if not raw_url:
+            return None
+        if isinstance(raw_url, list):
+            raw_url = raw_url[0] if raw_url else ""
+        raw_url = str(raw_url).replace("\n", " ").replace("\t", " ").strip()
+        raw_url = raw_url.split(",")[0].split(" ")[0].strip()
+        if not raw_url or raw_url.startswith("data:"):
+            return None
+        if raw_url.startswith("//"):
+            raw_url = "https:" + raw_url
+        return urljoin(page_url, raw_url)
+
+    def get_image_src(self, img, page_url):
+        possible_srcs = [
+            img.get("data-src"),
+            img.get("data-lazy-src"),
+            img.get("data-cfsrc"),
+            img.get("data-src-optimized"),
+            img.get("data-original"),
+            img.get("data-original-src"),
+            img.get("src"),
+            img.get("srcset"),
+        ]
+        for p_src in possible_srcs:
+            src = self.normalize_image_url(p_src, page_url)
+            if src and src.startswith("http") and not any(x in src.lower() for x in ["logo", "banner", "button", "avatar", "icon"]):
+                return src
+        return None
+
+    def extract_reader_images(self, soup, page_url):
+        selectors = [
+            "#readerarea img",
+            ".reading-content img",
+            "img.wp-manga-chapter-img",
+            ".wp-manga-chapter-img img",
+            ".chapter-content img",
+            ".entry-content img",
+        ]
+        image_urls = []
+        seen = set()
+        for selector in selectors:
+            for img in soup.select(selector):
+                src = self.get_image_src(img, page_url)
+                if src and src not in seen:
+                    seen.add(src)
+                    image_urls.append(src)
+        if image_urls:
+            return image_urls
+
+        for img in soup.find_all("img"):
+            src = self.get_image_src(img, page_url)
+            if src and src not in seen:
+                seen.add(src)
+                image_urls.append(src)
+        return image_urls
 
     def run_madara_scraper(self, url):
         try:
             start = self.current_start_ch
             end = self.current_end_ch
             save_path = self.path_entry.get().strip() or "downloads"
-            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+                "Referer": "https://www.google.com/",
+            }
             
             # Universal Chapter Stripping: handles /chapter-1/ and /chapter/1/
             base_url = re.sub(r"chapter[/-]\d+/?$", "", url, flags=re.IGNORECASE).rstrip("/")
@@ -350,6 +434,8 @@ class WebtoonDownloaderGUI(ctk.CTk):
                         f"{base_url}chapter/{ch_num}/",
                         f"{base_url}ch-{ch_num}/"
                     ]
+                    if self.extract_chapter_number(url) == ch_num:
+                        ch_url_patterns.insert(0, url)
                     
                     found = False
                     for ch_url in ch_url_patterns:
@@ -358,39 +444,21 @@ class WebtoonDownloaderGUI(ctk.CTk):
                             res = client.get(ch_url)
                             if res.status_code == 200:
                                 soup = BeautifulSoup(res.text, "lxml")
-                                # Deep Scan for all images
-                                all_images = soup.find_all("img")
-                                self.after(0, lambda: self.log(f"Нийт {len(all_images)} зураг оллоо. Шүүж байна..."))
+                                image_urls = self.extract_reader_images(soup, ch_url)
+                                self.after(0, lambda count=len(image_urls): self.log(f"Нийт {count} зураг оллоо. Татаж байна..."))
                                 
-                                if all_images:
+                                if image_urls:
                                     ch_folder = os.path.join(save_path, f"Chapter {ch_num}")
                                     os.makedirs(ch_folder, exist_ok=True)
                                     count = 0
-                                    for img in all_images:
-                                        # Exhaustive search for the real image URL
-                                        possible_srcs = [
-                                            img.get("data-src"), img.get("data-lazy-src"), 
-                                            img.get("data-cfsrc"), img.get("data-src-optimized"),
-                                            img.get("src"), img.get("srcset"), img.get("data-original-src")
-                                        ]
-                                        
-                                        src = None
-                                        for p_src in possible_srcs:
-                                            if p_src:
-                                                if isinstance(p_src, list): p_src = p_src[0]
-                                                p_src = p_src.split(",")[0].split(" ")[0].strip()
-                                                if p_src.startswith("//"): p_src = "https:" + p_src
-                                                if p_src.startswith("http") and not any(x in p_src.lower() for x in ["logo", "banner", "button", "avatar", "icon"]):
-                                                    src = p_src
-                                                    break
-                                        
-                                        if not src: continue
-                                        
+                                    for src in image_urls:
                                         try:
                                             # Spoof referer and user-agent for each image
-                                            img_res = client.get(src, headers={"Referer": ch_url})
-                                            # Manga pages are usually > 20KB. Icons are small.
-                                            if len(img_res.content) < 20000: continue 
+                                            img_res = client.get(src, headers={"Referer": ch_url, "User-Agent": headers["User-Agent"]})
+                                            if img_res.status_code != 200:
+                                                continue
+                                            # Reader selectors already filter the page; keep small panels/credits too.
+                                            if len(img_res.content) < 1000: continue 
                                             
                                             ext = src.split(".")[-1].split("?")[0]
                                             if len(ext) > 4 or "/" in ext: ext = "jpg"
