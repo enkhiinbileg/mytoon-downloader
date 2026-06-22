@@ -665,6 +665,13 @@ class WebtoonDownloaderGUI(ctk.CTk):
                 "example": "https://nebula.mn/chapter/бүлэг-1-48/",
             },
             {
+                "name": "Manga.mn",
+                "domain": "manga.mn",
+                "status": "Асуудалгүй: олноор татах горим дэмжигдсэн.",
+                "range": "Start / End range дэмжинэ. URL pattern ашиглана.",
+                "example": "https://manga.mn/manga/Teenage-mercenary/000",
+            },
+            {
                 "name": "Universal fallback",
                 "domain": "Бусад manga/manhwa сайтууд",
                 "status": "Туршиж үзнэ: site бүр дээр 100% баталгаатай биш.",
@@ -780,14 +787,8 @@ class WebtoonDownloaderGUI(ctk.CTk):
         is_webtoons_viewer = self.is_webtoons_viewer_url(url)
         is_manga_mn = "manga.mn" in urlparse(url).netloc.lower()
         is_manhwaread = "manhwaread.com" in urlparse(url).netloc.lower()
-        is_direct_scraper = is_manhwaread or self.should_use_direct_scraper(url)
+        is_direct_scraper = is_manhwaread or is_manga_mn or self.should_use_direct_scraper(url)
 
-        if is_manga_mn:
-            message = "manga.mn login session is valid, but this downloader does not support automated manga.mn chapter downloads."
-            self.log(message)
-            messagebox.showinfo("manga.mn", message)
-            return
-        
         if is_webtoons and not is_webtoons_viewer:
             engine_name = "WEBTOONS"
             args = [self.downloader_path, url]
@@ -867,7 +868,13 @@ class WebtoonDownloaderGUI(ctk.CTk):
         if match:
             return int(match.group(1))
         match = re.search(r"[?&]episode_no=(\d+)(?:&|$)", url, flags=re.IGNORECASE)
-        return int(match.group(1)) if match else None
+        if match:
+            return int(match.group(1))
+        if "manga.mn/manga/" in url.lower():
+            match = re.search(r"manga\.mn/manga/[^/]+/(\d+)", url, flags=re.IGNORECASE)
+            if match:
+                return int(match.group(1))
+        return None
 
     def extract_nebula_chapter_urls(self, soup, page_url):
         if "nebula.mn" not in urlparse(page_url).netloc.lower():
@@ -889,6 +896,15 @@ class WebtoonDownloaderGUI(ctk.CTk):
 
     def build_chapter_url_patterns(self, url, base_url, ch_num):
         patterns = []
+        if "manga.mn/manga/" in url.lower():
+            manga_match = re.search(r"(?i)(manga\.mn/manga/[^/]+/)\d*", url)
+            if manga_match:
+                prefix = manga_match.group(1)
+                patterns.append(f"https://{prefix}{str(ch_num).zfill(3)}")
+                patterns.append(f"https://{prefix}{str(ch_num)}")
+                patterns.append(f"http://{prefix}{str(ch_num).zfill(3)}")
+                patterns.append(f"http://{prefix}{str(ch_num)}")
+        
         chapter_match = re.search(r"(?i)(chapter[/-])(\d+)", url)
         padded_ch_num = str(ch_num)
         if chapter_match:
