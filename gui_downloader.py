@@ -1224,7 +1224,24 @@ class WebtoonDownloaderGUI(ctk.CTk):
         try:
             with sync_playwright() as p:
                 browser = p.chromium.launch(headless=True)
-                page = browser.new_page(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+                context = browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+                
+                # INJECT COOKIES
+                cookies_dict = self.cookies_for_url(url)
+                if cookies_dict:
+                    from urllib.parse import urlparse
+                    domain = urlparse(url).netloc
+                    playwright_cookies = []
+                    for name, value in cookies_dict.items():
+                        playwright_cookies.append({
+                            "name": name,
+                            "value": value,
+                            "domain": domain,
+                            "path": "/"
+                        })
+                    context.add_cookies(playwright_cookies)
+                
+                page = context.new_page()
                 
                 self.after(0, lambda: self.log(f"Browser-оор холбогдож байна: {url}"))
                 page.goto(url, wait_until="domcontentloaded", timeout=60000)
@@ -1264,10 +1281,14 @@ class WebtoonDownloaderGUI(ctk.CTk):
                 for img in image_elements:
                     try:
                         # Get dimensions and src using JS for accuracy
-                        info = page.evaluate("(img) => ({src: img.src || img.dataset.src, w: img.naturalWidth, h: img.naturalHeight})", img)
+                        info = page.evaluate("(img) => ({src: img.getAttribute('data-src') || img.dataset?.src || img.src, w: img.naturalWidth, h: img.naturalHeight})", img)
                         src = info.get("src")
                         w = info.get("w", 0)
                         h = info.get("h", 0)
+                        
+                        if not src or not src.startswith("http"): continue
+                        
+                        self.after(0, lambda s=src: self.log(f"Playwright found img: {s}"))
                         
                         if not src or not src.startswith("http"): continue
                         
@@ -1276,25 +1297,26 @@ class WebtoonDownloaderGUI(ctk.CTk):
                         if any(x in src.lower() for x in ["logo", "banner", "button", "icon", "promo", "ads", "discord", "social", "donate", "sub", "avatar"]):
                             continue
                         
-                        # 2. Aspect Ratio & Size: 
-                        # Real manga pages are VERY TALL (h > w * 1.5) and high res (h > 800)
+                        # 2. Size: Loosened to support manga.mn split pages
                         if h > 0 and w > 0:
-                            if h < w * 1.5: continue # Skip square/landscape (h must be 1.5x width)
-                            if h < 800: continue # Skip small elements
-                            if w < 300: continue # Skip tiny vertical lines
+                            if h < 200: continue # Skip very small elements
+                            if w < 200: continue # Skip very thin elements
                         
-                        # Download using httpx
-                        headers = {"User-Agent": "Mozilla/5.0", "Referer": url}
-                        with httpx.Client(headers=headers, cookies=self.cookies_for_url(url), follow_redirects=True, timeout=20.0, verify=not self.should_skip_tls_verify(url)) as client:
-                            img_res = client.get(src)
-                            if len(img_res.content) < 40000: continue # Manga pages are usually > 40KB
-                            
-                            ext = src.split(".")[-1].split("?")[0]
-                            if len(ext) > 4: ext = "jpg"
-                            with open(os.path.join(ch_folder, f"page_{count+1:03d}.{ext}"), "wb") as f:
-                                f.write(img_res.content)
-                            count += 1
-                    except: continue
+                        # Download using playwright context request to bypass Cloudflare
+                        self.after(0, lambda s=src: self.log(f"Downloading {s}"))
+                        img_res = context.request.get(src, timeout=20000)
+                        img_bytes = img_res.body()
+                        self.after(0, lambda s=len(img_bytes): self.log(f"Downloaded {s} bytes"))
+                        if len(img_bytes) < 10000: continue # Pages should be > 10KB
+                        
+                        ext = src.split(".")[-1].split("?")[0]
+                        if len(ext) > 4: ext = "jpg"
+                        with open(os.path.join(ch_folder, f"page_{count+1:03d}.{ext}"), "wb") as f:
+                            f.write(img_bytes)
+                        count += 1
+                    except Exception as ex:
+                        self.after(0, lambda err=str(ex): self.log(f"Playwright download error: {err}"))
+                        continue
                 
                 browser.close()
                 if count > 0:
