@@ -8,6 +8,7 @@ import httpx
 import io
 import ctypes
 import time
+import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import unquote, urljoin, urlparse
 from bs4 import BeautifulSoup
@@ -48,9 +49,20 @@ class WebtoonDownloaderGUI(ctk.CTk):
         # Downloader Paths
         self.downloader_path = r"C:\Users\Gavl\AppData\Roaming\Python\Python314\Scripts\webtoon-downloader.exe"
         self.gallery_dl_path = r"C:\Users\Gavl\AppData\Roaming\Python\Python314\Scripts\gallery-dl.exe"
-        self.direct_scraper_domains = ("manhwaread.com", "manhuaus.com", "mgeko.cc", "asurascans.com", "hentai20.io", "kingofshojo.com", "nebula.mn")
+        self.direct_scraper_domains = (
+            "mytoon.site",
+            "manhwaread.com",
+            "manhuaus.com",
+            "mgeko.cc",
+            "asurascans.com",
+            "hentai20.io",
+            "kingofshojo.com",
+            "nebula.mn"
+        )
         self.supported_sites_window = None
+        self.cached_mytoon_data = None
         app_data = os.getenv("LOCALAPPDATA") or os.path.expanduser("~")
+        self.mytoon_session_path = os.path.join(app_data, "MYTOON-Downloader", "mytoon_session.json")
         self.nebula_session_path = os.path.join(app_data, "MYTOON-Downloader", "nebula_session.json")
         self.manga_mn_session_path = os.path.join(app_data, "MYTOON-Downloader", "manga_mn_session.json")
         
@@ -105,7 +117,7 @@ class WebtoonDownloaderGUI(ctk.CTk):
                                                fg_color="#000000", corner_radius=10)
         self.preview_image_label.pack(padx=10, pady=(10, 5))
         
-        self.webtoon_name_label = ctk.CTkLabel(self.info_card, text="Мэдээлэл байхгүй", font=ctk.CTkFont(size=14, weight="bold"), 
+        self.webtoon_name_label = ctk.CTkLabel(self.info_card, text="Мэдээлэл байхгүй", font=ctk.CTkFont(size=13, weight="bold"), 
                                               text_color=self.UCHIHA_TEXT, wraplength=210)
         self.webtoon_name_label.pack(padx=10, pady=(5, 10))
 
@@ -138,7 +150,7 @@ class WebtoonDownloaderGUI(ctk.CTk):
         self.path_frame.grid(row=7, column=0, padx=20, pady=8, sticky="ew")
         
         self.path_entry = ctk.CTkEntry(self.path_frame, placeholder_text="Хадгалах хавтас...", height=35, corner_radius=8,
-                                      fg_color=self.UCHIHA_GRAY, border_color="#333333")
+                                       fg_color=self.UCHIHA_GRAY, border_color="#333333")
         self.path_entry.pack(side="left", fill="x", expand=True, padx=(0, 5))
         self.path_entry.insert(0, os.getcwd())
 
@@ -147,26 +159,33 @@ class WebtoonDownloaderGUI(ctk.CTk):
                                           hover_color="#333333", border_width=1, border_color="#444444")
         self.browse_button.pack(side="right")
 
+        self.mytoon_login_button = ctk.CTkButton(
+            self.sidebar_frame, text="MYTOON НЭВТРЭХ", height=38, corner_radius=8,
+            command=self.start_mytoon_login, fg_color="#222222", hover_color="#333333",
+            border_width=1, border_color=self.UCHIHA_RED, text_color=self.UCHIHA_TEXT
+        )
+        self.mytoon_login_button.grid(row=8, column=0, padx=25, pady=(5, 5), sticky="ew")
+
         self.nebula_login_button = ctk.CTkButton(
             self.sidebar_frame, text="NEBULA НЭВТРЭХ", height=38, corner_radius=8,
             command=self.start_nebula_login, fg_color="#222222", hover_color="#333333",
             border_width=1, border_color="#6D4AFF", text_color=self.UCHIHA_TEXT
         )
-        self.nebula_login_button.grid(row=8, column=0, padx=25, pady=(5, 5), sticky="ew")
+        self.nebula_login_button.grid(row=9, column=0, padx=25, pady=(5, 5), sticky="ew")
 
         self.manga_mn_login_button = ctk.CTkButton(
             self.sidebar_frame, text="MANGA.MN LOGIN", height=38, corner_radius=8,
             command=self.start_manga_mn_login, fg_color="#222222", hover_color="#333333",
             border_width=1, border_color="#3CB371", text_color=self.UCHIHA_TEXT
         )
-        self.manga_mn_login_button.grid(row=9, column=0, padx=25, pady=(5, 5), sticky="ew")
+        self.manga_mn_login_button.grid(row=10, column=0, padx=25, pady=(5, 5), sticky="ew")
 
         self.supported_sites_button = ctk.CTkButton(self.sidebar_frame, text="ДЭМЖДЭГ САЙТУУД", height=38, corner_radius=8,
                                                    command=self.show_supported_sites,
                                                    fg_color="#222222", hover_color="#333333",
                                                    border_width=1, border_color=self.UCHIHA_RED,
                                                    text_color=self.UCHIHA_TEXT)
-        self.supported_sites_button.grid(row=10, column=0, padx=25, pady=(5, 10), sticky="ew")
+        self.supported_sites_button.grid(row=11, column=0, padx=25, pady=(5, 10), sticky="ew")
 
         # 2. MAIN CONTENT
         self.main_frame = ctk.CTkFrame(self, corner_radius=20, fg_color="#080808")
@@ -254,6 +273,18 @@ class WebtoonDownloaderGUI(ctk.CTk):
             self.path_entry.delete(0, "end")
             self.path_entry.insert(0, folder)
 
+    def load_mytoon_cookies(self):
+        try:
+            with open(self.mytoon_session_path, "r", encoding="utf-8") as session_file:
+                cookies = json.load(session_file)
+            return {
+                cookie["name"]: cookie["value"]
+                for cookie in cookies
+                if cookie.get("name") and cookie.get("value")
+            }
+        except (OSError, ValueError, TypeError):
+            return {}
+
     def load_nebula_cookies(self):
         try:
             with open(self.nebula_session_path, "r", encoding="utf-8") as session_file:
@@ -280,11 +311,139 @@ class WebtoonDownloaderGUI(ctk.CTk):
 
     def cookies_for_url(self, url):
         host = urlparse(url).netloc.lower()
+        if host == "mytoon.site" or host.endswith(".mytoon.site"):
+            return self.load_mytoon_cookies()
         if host == "nebula.mn" or host.endswith(".nebula.mn"):
             return self.load_nebula_cookies()
         if host == "manga.mn" or host.endswith(".manga.mn"):
             return self.load_manga_mn_cookies()
         return {}
+
+    def launch_any_browser(self, playwright, headless=False):
+        for ch in ["msedge", "chrome"]:
+            try:
+                return playwright.chromium.launch(channel=ch, headless=headless)
+            except Exception:
+                pass
+
+        browser_paths = [
+            r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+            r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+            os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\Edge\Application\msedge.exe"),
+            os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"),
+        ]
+        for p in browser_paths:
+            if os.path.exists(p):
+                try:
+                    return playwright.chromium.launch(executable_path=p, headless=headless)
+                except Exception:
+                    pass
+
+        return playwright.chromium.launch(headless=headless)
+
+    def launch_persistent_browser(self, playwright, profile_dir, headless=False):
+        for ch in ["msedge", "chrome"]:
+            try:
+                return playwright.chromium.launch_persistent_context(
+                    profile_dir,
+                    channel=ch,
+                    headless=headless,
+                    args=["--disable-blink-features=AutomationControlled"],
+                )
+            except Exception:
+                pass
+        return playwright.chromium.launch_persistent_context(
+            profile_dir,
+            headless=headless,
+        )
+
+    def is_valid_mytoon_session(self, cookies):
+        if not cookies:
+            return False
+        for c in cookies:
+            name = c.get("name", "").lower()
+            if name.startswith("sb-") and "auth-token" in name and not name.endswith("-code-verifier"):
+                val = c.get("value", "")
+                if len(val) > 20:
+                    return True
+        return False
+
+    def start_mytoon_login(self):
+        if sync_playwright is None:
+            messagebox.showerror("Playwright алга", "Playwright суулгаагүй тул MyToon login browser нээж чадсангүй.")
+            return
+        self.mytoon_login_button.configure(state="disabled", text="BROWSER НЭЭЖ БАЙНА...")
+        threading.Thread(target=self.run_mytoon_login, daemon=True).start()
+
+    def run_mytoon_login(self):
+        context = None
+        try:
+            profile_dir = os.path.join(os.path.dirname(self.mytoon_session_path), "mytoon_browser_profile")
+            os.makedirs(profile_dir, exist_ok=True)
+            self.after(0, self.log, "MyToon login browser нээгдлээ. Аккаунтаараа нэвтэрнэ үү.")
+            with sync_playwright() as playwright:
+                context = self.launch_persistent_browser(playwright, profile_dir, headless=False)
+                page = context.pages[0] if context.pages else context.new_page()
+                page.goto("https://mytoon.site", wait_until="domcontentloaded", timeout=60000)
+                page.wait_for_timeout(1000)
+
+                # Try opening login modal if not logged in
+                try:
+                    login_btn = page.locator("button:has-text('НЭВТРЭХ')").first
+                    if login_btn.is_visible(timeout=2000):
+                        login_btn.click()
+                except Exception:
+                    pass
+
+                deadline = time.time() + 300
+                saved = False
+                last_cookies = []
+                while time.time() < deadline:
+                    if page.is_closed():
+                        break
+                    try:
+                        last_cookies = context.cookies("https://mytoon.site")
+                        if self.is_valid_mytoon_session(last_cookies):
+                            page.wait_for_timeout(1500)
+                            last_cookies = context.cookies("https://mytoon.site")
+                            with open(self.mytoon_session_path, "w", encoding="utf-8") as session_file:
+                                json.dump(last_cookies, session_file, ensure_ascii=False, indent=2)
+                            saved = True
+                            break
+                    except Exception:
+                        pass
+                    page.wait_for_timeout(600)
+
+                if not saved and last_cookies and self.is_valid_mytoon_session(last_cookies):
+                    with open(self.mytoon_session_path, "w", encoding="utf-8") as session_file:
+                        json.dump(last_cookies, session_file, ensure_ascii=False, indent=2)
+                    saved = True
+
+                if saved:
+                    self.cached_mytoon_data = None
+                    self.after(0, self.log, "MyToon session амжилттай хадгалагдлаа.")
+                    self.after(0, lambda: messagebox.showinfo("MyToon", "Нэвтрэлт амжилттай! Одоо VIP бүлгүүдээ татах боломжтой."))
+                else:
+                    self.after(0, self.log, "MyToon нэвтрэлт баталгаажсангүй эсвэл browser хаагдлаа.")
+                    self.after(0, lambda: messagebox.showwarning("MyToon", "Нэвтрэлт хийгдээгүй байна. Дахин 'MYTOON НЭВТРЭХ' дарж нэвтэрнэ үү."))
+
+                try:
+                    context.close()
+                except Exception:
+                    pass
+                context = None
+        except Exception as err:
+            self.after(0, self.log, f"MyToon login алдаа: {err}")
+            self.after(0, lambda e=str(err): messagebox.showerror("MyToon login", e))
+        finally:
+            if context:
+                try:
+                    context.close()
+                except Exception:
+                    pass
+            self.after(0, lambda: self.mytoon_login_button.configure(state="normal", text="MYTOON НЭВТРЭХ"))
 
     def start_nebula_login(self):
         if sync_playwright is None:
@@ -318,7 +477,7 @@ class WebtoonDownloaderGUI(ctk.CTk):
             os.makedirs(os.path.dirname(self.nebula_session_path), exist_ok=True)
             self.after(0, self.log, "Nebula login browser нээгдлээ. Аккаунтаараа нэвтэрнэ үү.")
             with sync_playwright() as playwright:
-                browser = playwright.chromium.launch(headless=False)
+                browser = self.launch_any_browser(playwright, headless=False)
                 context = browser.new_context()
                 page = context.new_page()
                 page.goto("https://nebula.mn/login", wait_until="domcontentloaded", timeout=60000)
@@ -358,61 +517,6 @@ class WebtoonDownloaderGUI(ctk.CTk):
         login_prompt = "зөвхөн бүртгэлтэй хэрэглэгчдэд" in body_text or "нэвтэрч орж уншина уу" in body_text
         auth_action = "бүртгэлээрээ нэвтрэх" in body_text or "бүртгүүлэх" in body_text
         return not login_prompt and not auth_action
-
-    def run_manga_mn_login(self, target_url):
-        browser = None
-        try:
-            os.makedirs(os.path.dirname(self.manga_mn_session_path), exist_ok=True)
-            self.after(0, self.log, "manga.mn login browser opened. Log in manually, then wait or close the browser.")
-            with sync_playwright() as playwright:
-                browser = playwright.chromium.launch(headless=False)
-                context = browser.new_context()
-                page = context.new_page()
-                page.goto("https://manga.mn/auth/login", wait_until="domcontentloaded", timeout=60000)
-
-                deadline = time.time() + 600
-                saved = False
-                left_auth_at = None
-                while time.time() < deadline:
-                    try:
-                        if page.is_closed():
-                            break
-                        cookies = context.cookies("https://manga.mn")
-                        on_auth_page = "/auth/login" in page.url or "/auth/register" in page.url
-                        if cookies and not on_auth_page:
-                            if left_auth_at is None:
-                                left_auth_at = time.time()
-                                page.wait_for_timeout(500)
-                                continue
-                            if time.time() - left_auth_at < 2:
-                                page.wait_for_timeout(500)
-                                continue
-                            with open(self.manga_mn_session_path, "w", encoding="utf-8") as session_file:
-                                json.dump(cookies, session_file, ensure_ascii=False, indent=2)
-                            saved = True
-                            break
-                        left_auth_at = None
-                        page.wait_for_timeout(500)
-                    except Exception:
-                        page.wait_for_timeout(500)
-
-                if saved:
-                    self.after(0, self.log, "manga.mn session saved.")
-                    self.after(0, lambda: messagebox.showinfo("manga.mn", "Login session saved."))
-                else:
-                    self.after(0, self.log, "manga.mn login was not confirmed. Session was not saved.")
-
-                browser.close()
-        except Exception as err:
-            self.after(0, self.log, f"manga.mn login error: {err}")
-            self.after(0, lambda e=str(err): messagebox.showerror("manga.mn login", e))
-        finally:
-            try:
-                if browser:
-                    browser.close()
-            except Exception:
-                pass
-            self.after(0, lambda: self.manga_mn_login_button.configure(state="normal", text="MANGA.MN LOGIN"))
 
     def verify_manga_mn_session_cookies(self, cookies, target_url):
         if not cookies:
@@ -526,7 +630,16 @@ class WebtoonDownloaderGUI(ctk.CTk):
             return ""
 
         lower_url = url.lower()
-        known_domains = list(self.direct_scraper_domains) + ["webtoons.com", "manga.mn"]
+
+        # Fix corrupted schemes like ps://, ttps://, ttp://, etc.
+        if re.match(r"^(?:https?//|[a-z]+://)", lower_url):
+            if not lower_url.startswith(("http://", "https://")):
+                colon_idx = url.find("://")
+                if colon_idx != -1:
+                    url = "https://" + url[colon_idx + 3:]
+                    lower_url = url.lower()
+
+        known_domains = list(self.direct_scraper_domains) + ["webtoons.com", "manga.mn", "mytoon.site"]
 
         if lower_url.startswith("https//"):
             url = "https://" + url[7:]
@@ -566,9 +679,14 @@ class WebtoonDownloaderGUI(ctk.CTk):
             prefix = "https://"
             host = url[:match.end()]
             path = url[match.end():]
-            if host.lower().startswith(("http://", "https://")):
-                prefix = ""
-            return self.restore_known_site_path(prefix + host + path)
+            if "://" in host:
+                host = host.split("://")[-1]
+                url = prefix + host + path
+            elif host.lower().startswith(("http://", "https://")):
+                url = host + path
+            else:
+                url = prefix + host + path
+            return self.restore_known_site_path(url)
 
         if lower_url.startswith("manhwa/") or "/viewer/" in lower_url:
             return "https://www.webtoons.com/en/" + url.lstrip("/")
@@ -589,8 +707,12 @@ class WebtoonDownloaderGUI(ctk.CTk):
             elif path.startswith("readeren"):
                 path = "/reader/en/" + path[len("readeren"):]
 
-        if path and not path.endswith("/") and not parsed.query and not parsed.fragment:
-            path += "/"
+        if "mytoon.site" in host:
+            if path.endswith("/"):
+                path = path.rstrip("/")
+        else:
+            if path and not path.endswith("/") and not parsed.query and not parsed.fragment:
+                path += "/"
 
         rebuilt = f"{parsed.scheme}://{parsed.netloc}{path}"
         if parsed.query:
@@ -599,6 +721,130 @@ class WebtoonDownloaderGUI(ctk.CTk):
             rebuilt += f"#{parsed.fragment}"
         return rebuilt
 
+    def is_mytoon_url(self, url):
+        return "mytoon.site" in urlparse(url).netloc.lower()
+
+    def extract_mytoon_data(self, url):
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Referer": "https://mytoon.site/",
+        }
+        soup = None
+        full_data = ""
+        try:
+            with httpx.Client(headers=headers, cookies=self.cookies_for_url(url), follow_redirects=True, timeout=15.0) as client:
+                res = client.get(url)
+                if res.status_code == 200:
+                    soup = BeautifulSoup(res.text, "lxml")
+                    chunks = []
+                    for s in soup.find_all("script"):
+                        if not s.string:
+                            continue
+                        for match in re.finditer(r'self\.__next_f\.push\(\[(\d+),\s*"(.*)"\]\)\s*;?', s.string, re.DOTALL):
+                            chunks.append(match.group(2))
+                    full_data = "".join(chunks)
+        except Exception:
+            return None
+
+        result = {
+            "webtoon_id": None,
+            "title": None,
+            "chapter_title": None,
+            "cover_url": None,
+            "current_chapter_num": None,
+            "current_chapter_id": None,
+            "current_images": [],
+            "all_chapters": {},
+            "is_vip_blocked": False
+        }
+
+        read_match = re.search(r"/webtoon/(\d+)/read/(\d+)", url)
+        main_match = re.search(r"/webtoon/(\d+)", url)
+        if read_match:
+            result["webtoon_id"] = int(read_match.group(1))
+            result["current_chapter_id"] = int(read_match.group(2))
+        elif main_match:
+            result["webtoon_id"] = int(main_match.group(1))
+
+        # 1. Parse initialWebtoon / webtoon
+        wt_match = re.search(r'\\"(?:initialWebtoon|webtoon)\\"\s*:\s*(\{.*?\}(?=,\\"|\}\]))', full_data)
+        if wt_match:
+            raw_wt = wt_match.group(1).replace(r'\"', '"').replace(r'\/', '/')
+            try:
+                wt_data = json.loads(raw_wt)
+                result["title"] = wt_data.get("title")
+                result["cover_url"] = wt_data.get("image")
+                result["webtoon_id"] = wt_data.get("id", result["webtoon_id"])
+            except Exception:
+                pass
+
+        # 2. Parse initialChapter
+        ch_match = re.search(r'\\"initialChapter\\":\s*(\{.*?\}(?=,\\"initialWebtoon\\"))', full_data)
+        if ch_match:
+            raw_ch = ch_match.group(1).replace(r'\"', '"').replace(r'\/', '/')
+            try:
+                ch_data = json.loads(raw_ch)
+                result["current_chapter_num"] = ch_data.get("chapter_number")
+                result["current_chapter_id"] = ch_data.get("id")
+                result["chapter_title"] = ch_data.get("title") or f"Chapter {result['current_chapter_num']}"
+                result["current_images"] = ch_data.get("images", [])
+            except Exception:
+                pass
+
+        # 3. Check VIP blocked
+        if r'\"initialIsVipBlocked\":true' in full_data or r'"initialIsVipBlocked":true' in full_data:
+            result["is_vip_blocked"] = True
+
+        # 4. Parse all chapters from RSC
+        all_ch_match = re.search(r'\\"(?:initialAllChapters|chapters)\\"\s*:\s*(\[.*?\])', full_data)
+        if all_ch_match:
+            raw_all = all_ch_match.group(1).replace(r'\"', '"').replace(r'\/', '/')
+            try:
+                ch_list = json.loads(raw_all)
+                for item in ch_list:
+                    c_num = item.get("chapter_number") or item.get("order_index")
+                    if c_num is not None:
+                        result["all_chapters"][int(c_num)] = item
+            except Exception:
+                pass
+
+        # 5. Extract chapters from HTML <a> links
+        if soup:
+            for a in soup.find_all("a", href=True):
+                href = a["href"]
+                m = re.search(r"/webtoon/(\d+)/read/(\d+)", href)
+                if m:
+                    w_id, ch_id = int(m.group(1)), int(m.group(2))
+                    text = a.get_text(" ", strip=True)
+                    ch_num_m = re.search(r"Chapter\s*(\d+)", text, re.IGNORECASE)
+                    if ch_num_m:
+                        ch_num = int(ch_num_m.group(1))
+                        if ch_num not in result["all_chapters"]:
+                            result["all_chapters"][ch_num] = {
+                                "id": ch_id,
+                                "webtoon_id": w_id,
+                                "chapter_number": ch_num,
+                                "title": f"Chapter {ch_num}",
+                                "url": f"https://mytoon.site{href}"
+                            }
+
+        # Fallback for title/cover from soup
+        if not result["title"] and soup:
+            og_title = soup.find("meta", property="og:title")
+            if og_title and og_title.get("content"):
+                result["title"] = og_title["content"]
+            elif soup.title:
+                t = soup.title.get_text().replace(" | WEBTOON", "").replace(" - WEBTOON", "").strip()
+                if t and t != "Уншиж байна...":
+                    result["title"] = t
+
+        if not result["cover_url"] and soup:
+            og_img = soup.find("meta", property="og:image")
+            if og_img and og_img.get("content"):
+                result["cover_url"] = og_img["content"]
+
+        return result
+
     def show_supported_sites(self):
         if self.supported_sites_window and self.supported_sites_window.winfo_exists():
             self.supported_sites_window.focus()
@@ -606,7 +852,7 @@ class WebtoonDownloaderGUI(ctk.CTk):
 
         window = ctk.CTkToplevel(self)
         window.title("Дэмждэг сайтууд")
-        window.geometry("720x520")
+        window.geometry("720x550")
         window.configure(fg_color="#050505")
         window.grid_columnconfigure(0, weight=1)
         window.grid_rowconfigure(1, weight=1)
@@ -622,6 +868,13 @@ class WebtoonDownloaderGUI(ctk.CTk):
         content.grid_columnconfigure(0, weight=1)
 
         sites = [
+            {
+                "name": "MYTOON",
+                "domain": "mytoon.site",
+                "status": "Асуудалгүй шалгасан: Cloudflare R2 серверээс өндөр хурдаар шууд татна.",
+                "range": "Бүлгүүдийн жагсаалтаас Start / End chapter range дэмжинэ. (VIP эрхтэйгээр нэвтэрч болно)",
+                "example": "https://mytoon.site/webtoon/116/read/3981 эсвэл https://mytoon.site/webtoon/116",
+            },
             {
                 "name": "WEBTOONS",
                 "domain": "webtoons.com",
@@ -665,13 +918,6 @@ class WebtoonDownloaderGUI(ctk.CTk):
                 "example": "https://nebula.mn/chapter/бүлэг-1-48/",
             },
             {
-                "name": "Manga.mn",
-                "domain": "manga.mn",
-                "status": "Асуудалгүй: олноор татах горим дэмжигдсэн.",
-                "range": "Start / End range дэмжинэ. URL pattern ашиглана.",
-                "example": "https://manga.mn/manga/Teenage-mercenary/000",
-            },
-            {
                 "name": "Universal fallback",
                 "domain": "Бусад manga/manhwa сайтууд",
                 "status": "Туршиж үзнэ: site бүр дээр 100% баталгаатай биш.",
@@ -704,53 +950,143 @@ class WebtoonDownloaderGUI(ctk.CTk):
 
     def verify_url(self):
         url = self.normalize_input_url(self.url_entry.get())
-        if not url: return
+        if not url:
+            return
 
         # Smart Fix for common mistakes
         if not url.startswith("http"):
-            if "webtoons.com" in url: url = "https://" + url
+            if "webtoons.com" in url:
+                url = "https://" + url
+            elif "mytoon.site" in url:
+                url = "https://" + url
             elif url.startswith("manhwa/") or "/viewer/" in url:
                 url = "https://www.webtoons.com/en/" + url.lstrip("/")
             else:
-                self.webtoon_name_label.configure(text="Хаяг буруу байна", text_color="yellow")
+                self.webtoon_name_label.configure(text="Анхаар: Бүтэн URL оруулна уу (https://...)", text_color="yellow")
                 return
+
+        if url != self.url_entry.get().strip():
             self.url_entry.delete(0, "end")
             self.url_entry.insert(0, url)
 
         self.webtoon_name_label.configure(text="Мэдээлэл татаж байна...", text_color="white")
-        
-        is_direct_preview = self.should_use_direct_scraper(url) or self.is_webtoons_viewer_url(url)
 
         def fetch():
             try:
-                headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
-                with httpx.Client(follow_redirects=True, timeout=15.0, headers=headers, cookies=self.cookies_for_url(url), verify=not self.should_skip_tls_verify(url)) as client:
+                # 1. Dedicated handler for MYTOON.SITE
+                if self.is_mytoon_url(url):
+                    info = self.extract_mytoon_data(url)
+                    self.cached_mytoon_data = info
+                    if not info or not info.get("title"):
+                        self.after(0, lambda: self.webtoon_name_label.configure(text="MyToon: Мэдээлэл олдсонгүй", text_color="yellow"))
+                        return
+
+                    title = info["title"]
+                    ch_num = info.get("current_chapter_num")
+                    all_ch = info.get("all_chapters", {})
+
+                    if ch_num:
+                        desc = f"Олдлоо: {title}\nБүлэг {ch_num}"
+                        if info.get("is_vip_blocked"):
+                            desc += " (VIP түгжээтэй)"
+                        elif info.get("current_images"):
+                            desc += f" ({len(info['current_images'])} зураг)"
+                        self.after(0, lambda c=ch_num: (self.start_entry.delete(0, "end"), self.start_entry.insert(0, str(c))))
+                        self.after(0, lambda c=ch_num: (self.end_entry.delete(0, "end"), self.end_entry.insert(0, str(c))))
+                    elif all_ch:
+                        min_c = min(all_ch.keys())
+                        max_c = max(all_ch.keys())
+                        desc = f"Олдлоо: {title}\nНийт {len(all_ch)} бүлэг ({min_c}-{max_c})"
+                        self.after(0, lambda c=min_c: (self.start_entry.delete(0, "end"), self.start_entry.insert(0, str(c))))
+                        self.after(0, lambda c=max_c: (self.end_entry.delete(0, "end"), self.end_entry.insert(0, str(c))))
+                    else:
+                        desc = f"Олдлоо: {title}"
+
+                    # Cover preview
+                    cover_url = info.get("cover_url")
+                    if cover_url:
+                        try:
+                            headers = {"User-Agent": "Mozilla/5.0"}
+                            with httpx.Client(timeout=10.0, follow_redirects=True) as img_client:
+                                img_res = img_client.get(cover_url, headers=headers)
+                                if img_res.status_code == 200:
+                                    img_data = Image.open(io.BytesIO(img_res.content))
+                                    img_data = ImageOps.fit(img_data, (250, 150), Image.Resampling.LANCZOS)
+                                    ctk_img = ctk.CTkImage(light_image=img_data, dark_image=img_data, size=(250, 150))
+                                    self.after(0, lambda: self.preview_image_label.configure(image=ctk_img, text=""))
+                        except Exception:
+                            pass
+
+                    self.after(0, lambda d=desc: self.webtoon_name_label.configure(text=d, text_color=self.UCHIHA_RED))
+                    return
+
+                # 2. Generic / Other sites
+                headers = {
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                    "Referer": "https://www.google.com/",
+                }
+                with httpx.Client(follow_redirects=True, timeout=12.0, headers=headers, cookies=self.cookies_for_url(url), verify=not self.should_skip_tls_verify(url)) as client:
                     response = client.get(url)
                     if response.status_code == 200:
                         soup = BeautifulSoup(response.text, "lxml")
                         title_tag = soup.find("meta", property="og:title")
-                        title = title_tag["content"] if title_tag else "Гарчиг олдсонгүй"
-                        
-                        # Try to find cover image
+                        reader = soup.select_one("#nkBody[data-manga-title]")
+                        page_title = soup.find("title")
+
+                        if title_tag and title_tag.get("content"):
+                            title = title_tag["content"]
+                        elif reader and reader.get("data-manga-title"):
+                            title = reader["data-manga-title"]
+                        elif page_title:
+                            title = page_title.get_text(" ", strip=True)
+                        else:
+                            title = "Хуудас олдлоо"
+
+                        if "nebula.mn" in urlparse(url).netloc.lower():
+                            locked = soup.select_one("#nkLocked") is not None
+                            image_count = len(self.extract_reader_images(soup, url))
+                            access = "Crown session шаардлагатай" if locked else f"{image_count} зураг"
+                            title = f"{title}\n{access}"
+
+                        # Try cover
                         img_tag = soup.find("meta", property="og:image")
-                        if img_tag:
-                            img_url = img_tag["content"]
-                            img_res = client.get(img_url)
-                            img_data = Image.open(io.BytesIO(img_res.content))
-                            img_data = ImageOps.fit(img_data, (250, 150), Image.Resampling.LANCZOS)
-                            ctk_img = ctk.CTkImage(light_image=img_data, dark_image=img_data, size=(250, 150))
-                            self.after(0, lambda: self.preview_image_label.configure(image=ctk_img, text=""))
-                        
-                        self.after(0, lambda: self.webtoon_name_label.configure(text=title, text_color=self.UCHIHA_RED))
+                        if img_tag and img_tag.get("content"):
+                            try:
+                                img_res = client.get(img_tag["content"])
+                                if img_res.status_code == 200:
+                                    img_data = Image.open(io.BytesIO(img_res.content))
+                                    img_data = ImageOps.fit(img_data, (250, 150), Image.Resampling.LANCZOS)
+                                    ctk_img = ctk.CTkImage(light_image=img_data, dark_image=img_data, size=(250, 150))
+                                    self.after(0, lambda: self.preview_image_label.configure(image=ctk_img, text=""))
+                            except Exception:
+                                pass
+
+                        ch_extracted = self.extract_chapter_number(url)
+                        if ch_extracted:
+                            self.after(0, lambda c=ch_extracted: (self.start_entry.delete(0, "end"), self.start_entry.insert(0, str(c))))
+                            self.after(0, lambda c=ch_extracted: (self.end_entry.delete(0, "end"), self.end_entry.insert(0, str(c))))
+
+                        self.after(0, lambda t=title: self.webtoon_name_label.configure(text=f"Олдлоо: {t}", text_color=self.UCHIHA_RED))
                     else:
-                        self.after(0, lambda: self.webtoon_name_label.configure(text=f"Алдаа {response.status_code}", text_color="yellow"))
+                        if self.should_use_direct_scraper(url) or self.is_webtoons_viewer_url(url):
+                            self.after(0, lambda: self.webtoon_name_label.configure(text="Direct scraper горимоор татах боломжтой", text_color="cyan"))
+                        elif "webtoons.com" not in url.lower():
+                            self.after(0, lambda: self.webtoon_name_label.configure(text="Universal горимоор татах боломжтой", text_color="cyan"))
+                        else:
+                            self.after(0, lambda: self.webtoon_name_label.configure(text=f"Алдаа: {response.status_code}", text_color="yellow"))
             except Exception as e:
-                self.after(0, lambda: self.webtoon_name_label.configure(text="Холболтын алдаа", text_color="yellow"))
+                if self.should_use_direct_scraper(url) or self.is_webtoons_viewer_url(url):
+                    self.after(0, lambda: self.webtoon_name_label.configure(text="Direct scraper горимоор татаж үзнэ", text_color="cyan"))
+                elif "webtoons.com" not in url.lower():
+                    self.after(0, lambda: self.webtoon_name_label.configure(text="Universal горимоор татаж үзнэ үү", text_color="cyan"))
+                else:
+                    self.after(0, lambda err=str(e): self.webtoon_name_label.configure(text=f"Холболтын алдаа: {err}", text_color="yellow"))
 
         threading.Thread(target=fetch, daemon=True).start()
 
     def start_download(self):
-        if self.downloading: return
+        if self.downloading:
+            return
         url = self.normalize_input_url(self.url_entry.get())
         if not url:
             messagebox.showerror("Алдаа", "URL хаяг оруулна уу")
@@ -774,22 +1110,28 @@ class WebtoonDownloaderGUI(ctk.CTk):
                 self.current_start_ch = int(start_str) if start_str else (chapter_from_url or 1)
             self.current_end_ch = int(end_str) if end_str and end_str.isdigit() else self.current_start_ch
             self.current_total_chapters = self.current_end_ch - self.current_start_ch + 1
-        except:
+        except Exception:
             self.current_start_ch = chapter_from_url or 1
             self.current_end_ch = self.current_start_ch
             self.current_total_chapters = 1
-
-        if url != self.url_entry.get().strip():
-            self.url_entry.delete(0, "end")
-            self.url_entry.insert(0, url)
 
         is_webtoons = "webtoons.com" in url.lower()
         is_webtoons_viewer = self.is_webtoons_viewer_url(url)
         is_manga_mn = "manga.mn" in urlparse(url).netloc.lower()
         is_manhwaread = "manhwaread.com" in urlparse(url).netloc.lower()
-        is_direct_scraper = is_manhwaread or is_manga_mn or self.should_use_direct_scraper(url)
+        is_mytoon = self.is_mytoon_url(url)
+        is_direct_scraper = is_manhwaread or self.should_use_direct_scraper(url)
 
-        if is_webtoons and not is_webtoons_viewer:
+        if is_manga_mn:
+            message = "manga.mn login session is valid, but this downloader does not support automated manga.mn chapter downloads."
+            self.log(message)
+            messagebox.showinfo("manga.mn", message)
+            return
+
+        if is_mytoon:
+            engine_name = "MYTOON Direct Scraper"
+            args = ["mytoon", url]
+        elif is_webtoons and not is_webtoons_viewer:
             engine_name = "WEBTOONS"
             args = [self.downloader_path, url]
             if start_str: args.extend(["--start", start_str])
@@ -812,7 +1154,6 @@ class WebtoonDownloaderGUI(ctk.CTk):
         self.update_progress(0)
         self.downloading = True
         self.log(f"Эхлүүлж байна: {url}")
-        
         self.log(f"Engine: {engine_name}")
 
         threading.Thread(target=self.run_downloader, args=(args,), daemon=True).start()
@@ -821,6 +1162,10 @@ class WebtoonDownloaderGUI(ctk.CTk):
         url = args[1]
         is_webtoons = "webtoons.com" in url.lower()
         try:
+            if args[0] == "mytoon":
+                self.run_mytoon_scraper(url)
+                return
+
             if args[0] == "direct-scraper" or (not is_webtoons and self.should_use_direct_scraper(url)):
                 self.run_madara_scraper(url)
                 return
@@ -860,6 +1205,9 @@ class WebtoonDownloaderGUI(ctk.CTk):
         return "webtoons.com" in parsed.netloc.lower() and ("/viewer" in parsed.path.lower() or "episode_no=" in parsed.query.lower())
 
     def extract_chapter_number(self, url):
+        if "mytoon.site" in url.lower():
+            if self.cached_mytoon_data and self.cached_mytoon_data.get("current_chapter_num"):
+                return self.cached_mytoon_data["current_chapter_num"]
         match = re.search(r"(?:/|-)chapter[/-](\d+)(?:[/?#-]|$)", url, flags=re.IGNORECASE)
         if match:
             return int(match.group(1))
@@ -868,13 +1216,7 @@ class WebtoonDownloaderGUI(ctk.CTk):
         if match:
             return int(match.group(1))
         match = re.search(r"[?&]episode_no=(\d+)(?:&|$)", url, flags=re.IGNORECASE)
-        if match:
-            return int(match.group(1))
-        if "manga.mn/manga/" in url.lower():
-            match = re.search(r"manga\.mn/manga/[^/]+/(\d+)", url, flags=re.IGNORECASE)
-            if match:
-                return int(match.group(1))
-        return None
+        return int(match.group(1)) if match else None
 
     def extract_nebula_chapter_urls(self, soup, page_url):
         if "nebula.mn" not in urlparse(page_url).netloc.lower():
@@ -896,15 +1238,6 @@ class WebtoonDownloaderGUI(ctk.CTk):
 
     def build_chapter_url_patterns(self, url, base_url, ch_num):
         patterns = []
-        if "manga.mn/manga/" in url.lower():
-            manga_match = re.search(r"(?i)(manga\.mn/manga/[^/]+/)\d*", url)
-            if manga_match:
-                prefix = manga_match.group(1)
-                patterns.append(f"https://{prefix}{str(ch_num).zfill(3)}")
-                patterns.append(f"https://{prefix}{str(ch_num)}")
-                patterns.append(f"http://{prefix}{str(ch_num).zfill(3)}")
-                patterns.append(f"http://{prefix}{str(ch_num)}")
-        
         chapter_match = re.search(r"(?i)(chapter[/-])(\d+)", url)
         padded_ch_num = str(ch_num)
         if chapter_match:
@@ -1089,9 +1422,40 @@ class WebtoonDownloaderGUI(ctk.CTk):
             except Exception:
                 pass
 
+    def convert_chapter_format(self, ch_folder, save_as, ch_num, save_path):
+        try:
+            if save_as in ("cbz", "zip"):
+                ext = ".cbz" if save_as == "cbz" else ".zip"
+                archive_path = os.path.join(save_path, f"Chapter {ch_num}{ext}")
+                with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_DEFLATED) as zf:
+                    for fname in sorted(os.listdir(ch_folder)):
+                        if fname.lower().endswith((".jpg", ".jpeg", ".png", ".webp")):
+                            zf.write(os.path.join(ch_folder, fname), arcname=fname)
+                self.after(0, lambda e=ext: self.log(f"{e.upper()} архив үүсгэгдлээ: Chapter {ch_num}{e}"))
+            elif save_as == "pdf":
+                img_files = [
+                    os.path.join(ch_folder, f)
+                    for f in sorted(os.listdir(ch_folder))
+                    if f.lower().endswith((".jpg", ".jpeg", ".png", ".webp"))
+                ]
+                if img_files:
+                    pil_imgs = []
+                    for f in img_files:
+                        try:
+                            im = Image.open(f).convert("RGB")
+                            pil_imgs.append(im)
+                        except Exception:
+                            pass
+                    if pil_imgs:
+                        pdf_path = os.path.join(save_path, f"Chapter {ch_num}.pdf")
+                        pil_imgs[0].save(pdf_path, save_all=True, append_images=pil_imgs[1:])
+                        self.after(0, lambda: self.log(f"PDF файл үүсгэгдлээ: Chapter {ch_num}.pdf"))
+        except Exception as e:
+            self.after(0, lambda err=str(e): self.log(f"Формат хөрвүүлэх алдаа: {err}"))
+
     def download_chapter_images(self, image_urls, ch_url, ch_folder, headers, max_workers=4):
         started_at = time.time()
-        timeout = httpx.Timeout(20.0, connect=10.0)
+        timeout = httpx.Timeout(25.0, connect=10.0)
         workers = min(max_workers, max(1, len(image_urls)))
         limits = httpx.Limits(max_connections=workers, max_keepalive_connections=workers)
 
@@ -1122,11 +1486,108 @@ class WebtoonDownloaderGUI(ctk.CTk):
         self.after(0, lambda seconds=time.time() - started_at: self.log(f"Image download time: {seconds:.1f}s"))
         return count
 
+    def run_mytoon_scraper(self, url):
+        try:
+            start = self.current_start_ch
+            end = self.current_end_ch
+            save_path = self.path_entry.get().strip() or "downloads"
+            save_as = self.format_combo.get()
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Referer": "https://mytoon.site/",
+            }
+
+            self.after(0, lambda: self.log(f"MYTOON горим: {start}-аас {end} бүлэг татаж байна..."))
+
+            # Fetch or use cached webtoon info
+            info = self.cached_mytoon_data
+            if not info or not info.get("all_chapters"):
+                info = self.extract_mytoon_data(url)
+                self.cached_mytoon_data = info
+
+            if not info:
+                self.after(0, lambda: self.log("Алдаа: MyToon хуудасны өгөгдлийг уншиж чадсангүй."))
+                self.after(0, lambda: messagebox.showerror("Алдаа", "MyToon мэдээлэл олдсонгүй."))
+                return
+
+            webtoon_id = info.get("webtoon_id")
+            all_chapters = info.get("all_chapters", {})
+
+            # If all_chapters is missing or incomplete, try loading webtoon main page
+            if (not all_chapters or max(all_chapters.keys(), default=0) < end) and webtoon_id:
+                self.after(0, lambda: self.log("Бүлгүүдийн жагсаалтыг үндсэн хуудаснаас шинэчилж байна..."))
+                main_info = self.extract_mytoon_data(f"https://mytoon.site/webtoon/{webtoon_id}")
+                if main_info and main_info.get("all_chapters"):
+                    all_chapters.update(main_info["all_chapters"])
+                    info["all_chapters"] = all_chapters
+
+            total_chapters = end - start + 1
+            downloaded_any = False
+
+            with httpx.Client(headers=headers, cookies=self.cookies_for_url(url), follow_redirects=True, timeout=25.0) as client:
+                for idx, ch_num in enumerate(range(start, end + 1)):
+                    ch_entry = all_chapters.get(ch_num)
+                    ch_id = ch_entry.get("id") if ch_entry else None
+
+                    # If chapter ID not found directly, check by index or current chapter
+                    if not ch_id and info.get("current_chapter_num") == ch_num:
+                        ch_id = info.get("current_chapter_id")
+
+                    if not ch_id:
+                        self.after(0, lambda c=ch_num: self.log(f"Бүлэг {c}: холбогдох ID олдсонгүй."))
+                        continue
+
+                    ch_title = (ch_entry.get("title") if ch_entry else None) or f"Chapter {ch_num}"
+                    ch_url = f"https://mytoon.site/webtoon/{webtoon_id}/read/{ch_id}"
+                    self.after(0, lambda c=ch_num, u=ch_url: self.log(f"Холбогдож байна: Бүлэг {c} ({u})"))
+
+                    # If this chapter was already loaded during verify and has images:
+                    if info.get("current_chapter_id") == ch_id and info.get("current_images"):
+                        image_urls = info["current_images"]
+                        is_vip_blocked = info.get("is_vip_blocked", False)
+                    else:
+                        ch_data = self.extract_mytoon_data(ch_url)
+                        image_urls = ch_data.get("current_images", []) if ch_data else []
+                        is_vip_blocked = ch_data.get("is_vip_blocked", False) if ch_data else False
+
+                    if is_vip_blocked or not image_urls:
+                        self.after(0, lambda c=ch_num: self.log(
+                            f"Бүлэг {c} түгжээтэй (VIP) байна. MYTOON НЭВТРЭХ товчоор нэвтэрнэ үү."
+                        ))
+                        continue
+
+                    self.after(0, lambda c=ch_num, count=len(image_urls): self.log(f"Бүлэг {c}: Нийт {count} зураг оллоо. Татаж байна..."))
+
+                    ch_folder = os.path.join(save_path, f"Chapter {ch_num}")
+                    os.makedirs(ch_folder, exist_ok=True)
+                    self.clear_old_page_images(ch_folder)
+                    
+                    count = self.download_chapter_images(image_urls, ch_url, ch_folder, headers)
+                    if count > 0:
+                        downloaded_any = True
+                        if save_as in ("cbz", "zip", "pdf"):
+                            self.convert_chapter_format(ch_folder, save_as, ch_num, save_path)
+                        self.after(0, lambda c=ch_num, cnt=count: self.log(f"Бүлэг {c} амжилттай: {cnt} зураг татлаа."))
+                        self.after(0, lambda p=int(((idx + 1) / total_chapters) * 100): self.update_progress(p))
+
+            if downloaded_any:
+                self.after(0, lambda: self.update_progress(100))
+                self.after(0, lambda: messagebox.showinfo("Амжилттай", "Татах ажиллагаа дууслаа!"))
+            else:
+                self.after(0, lambda: self.log("Зураг татагдсангүй. Бүлэг түгжээтэй эсвэл хандалт хориглогдсон байж болзошгүй."))
+                self.after(0, lambda: messagebox.showwarning("Анхаар", "Зураг татагдсангүй. Бүлэг түгжээтэй эсвэл эрх дутуу байна."))
+        except Exception as err:
+            self.after(0, lambda e=str(err): self.log(f"MyToon алдаа: {e}"))
+            self.after(0, lambda e=str(err): messagebox.showerror("Системийн алдаа", e))
+        finally:
+            self.after(0, self.reset_ui)
+
     def run_madara_scraper(self, url):
         try:
             start = self.current_start_ch
             end = self.current_end_ch
             save_path = self.path_entry.get().strip() or "downloads"
+            save_as = self.format_combo.get()
             headers = {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
@@ -1199,16 +1660,22 @@ class WebtoonDownloaderGUI(ctk.CTk):
                                     
                                     if count > 0:
                                         downloaded_any = True
+                                        if save_as in ("cbz", "zip", "pdf"):
+                                            self.convert_chapter_format(ch_folder, save_as, ch_num, save_path)
                                         self.after(0, lambda c=ch_num, cnt=count: self.log(f"Бүлэг {c} амжилттай: {cnt} зураг татлаа."))
                                         self.after(0, lambda p=int(((idx + 1) / total_chapters) * 100): self.update_progress(p))
                                         found = True
                                         break
-                        except: continue
+                        except Exception:
+                            continue
                     
                     if not found and not locked:
                         if sync_playwright:
                             self.after(0, lambda: self.log("Playwright (Advanced) горим идэвхжлээ..."))
                             found = self.run_playwright_scraper(ch_url_patterns[0], ch_num, save_path)
+                            if found and save_as in ("cbz", "zip", "pdf"):
+                                ch_folder = os.path.join(save_path, f"Chapter {ch_num}")
+                                self.convert_chapter_format(ch_folder, save_as, ch_num, save_path)
                         else:
                             self.after(0, lambda c=ch_num: self.log(f"Бүлэг {c} олдсонгүй эсвэл зураггүй байна."))
                 
@@ -1223,25 +1690,8 @@ class WebtoonDownloaderGUI(ctk.CTk):
     def run_playwright_scraper(self, url, ch_num, save_path):
         try:
             with sync_playwright() as p:
-                browser = p.chromium.launch(headless=True)
-                context = browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-                
-                # INJECT COOKIES
-                cookies_dict = self.cookies_for_url(url)
-                if cookies_dict:
-                    from urllib.parse import urlparse
-                    domain = urlparse(url).netloc
-                    playwright_cookies = []
-                    for name, value in cookies_dict.items():
-                        playwright_cookies.append({
-                            "name": name,
-                            "value": value,
-                            "domain": domain,
-                            "path": "/"
-                        })
-                    context.add_cookies(playwright_cookies)
-                
-                page = context.new_page()
+                browser = self.launch_any_browser(p, headless=True)
+                page = browser.new_page(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
                 
                 self.after(0, lambda: self.log(f"Browser-оор холбогдож байна: {url}"))
                 page.goto(url, wait_until="domcontentloaded", timeout=60000)
@@ -1263,14 +1713,12 @@ class WebtoonDownloaderGUI(ctk.CTk):
                         window.scrollTo(0, document.body.scrollHeight);
                     }
                 """)
-                page.wait_for_timeout(2000) # Wait for images to load
+                page.wait_for_timeout(2000)
                 
                 # Extract image URLs with STRICT filtering
-                # Only target the main reader area to avoid ads
                 image_elements = page.query_selector_all("#readerarea img, .reading-content img, .wp-manga-chapter-img img")
                 
                 if not image_elements:
-                    # Very last resort, but still with strict filters
                     image_elements = page.query_selector_all("img")
 
                 ch_folder = os.path.join(save_path, f"Chapter {ch_num}")
@@ -1280,42 +1728,32 @@ class WebtoonDownloaderGUI(ctk.CTk):
                 count = 0
                 for img in image_elements:
                     try:
-                        # Get dimensions and src using JS for accuracy
-                        info = page.evaluate("(img) => ({src: img.getAttribute('data-src') || img.dataset?.src || img.src, w: img.naturalWidth, h: img.naturalHeight})", img)
+                        info = page.evaluate("(img) => ({src: img.src || img.dataset.src, w: img.naturalWidth, h: img.naturalHeight})", img)
                         src = info.get("src")
                         w = info.get("w", 0)
                         h = info.get("h", 0)
                         
                         if not src or not src.startswith("http"): continue
                         
-                        self.after(0, lambda s=src: self.log(f"Playwright found img: {s}"))
-                        
-                        if not src or not src.startswith("http"): continue
-                        
-                        # ULTRA STRICT FILTERS:
-                        # 1. Exclusion keywords
                         if any(x in src.lower() for x in ["logo", "banner", "button", "icon", "promo", "ads", "discord", "social", "donate", "sub", "avatar"]):
                             continue
                         
-                        # 2. Size: Loosened to support manga.mn split pages
                         if h > 0 and w > 0:
-                            if h < 200: continue # Skip very small elements
-                            if w < 200: continue # Skip very thin elements
+                            if h < w * 1.5: continue
+                            if h < 800: continue
+                            if w < 300: continue
                         
-                        # Download using playwright context request to bypass Cloudflare
-                        self.after(0, lambda s=src: self.log(f"Downloading {s}"))
-                        img_res = context.request.get(src, timeout=20000)
-                        img_bytes = img_res.body()
-                        self.after(0, lambda s=len(img_bytes): self.log(f"Downloaded {s} bytes"))
-                        if len(img_bytes) < 10000: continue # Pages should be > 10KB
-                        
-                        ext = src.split(".")[-1].split("?")[0]
-                        if len(ext) > 4: ext = "jpg"
-                        with open(os.path.join(ch_folder, f"page_{count+1:03d}.{ext}"), "wb") as f:
-                            f.write(img_bytes)
-                        count += 1
-                    except Exception as ex:
-                        self.after(0, lambda err=str(ex): self.log(f"Playwright download error: {err}"))
+                        headers = {"User-Agent": "Mozilla/5.0", "Referer": url}
+                        with httpx.Client(headers=headers, cookies=self.cookies_for_url(url), follow_redirects=True, timeout=20.0, verify=not self.should_skip_tls_verify(url)) as client:
+                            img_res = client.get(src)
+                            if len(img_res.content) < 40000: continue
+                            
+                            ext = src.split(".")[-1].split("?")[0]
+                            if len(ext) > 4: ext = "jpg"
+                            with open(os.path.join(ch_folder, f"page_{count+1:03d}.{ext}"), "wb") as f:
+                                f.write(img_res.content)
+                            count += 1
+                    except Exception:
                         continue
                 
                 browser.close()
@@ -1330,74 +1768,6 @@ class WebtoonDownloaderGUI(ctk.CTk):
     def reset_ui(self):
         self.download_button.configure(state="normal", text="ТАТАЖ ЭХЛЭХ", fg_color=self.UCHIHA_RED)
         self.downloading = False
-
-    def verify_url(self):
-        url = self.normalize_input_url(self.url_entry.get())
-        if not url:
-            return
-
-        # Smart Fix: Only prepend webtoons.com if it's a known webtoons path
-        if not url.startswith("http"):
-            if "webtoons.com" in url:
-                url = "https://" + url
-            elif url.startswith("manhwa/") or "/viewer/" in url:
-                url = "https://www.webtoons.com/en/" + url.lstrip("/")
-            else:
-                self.webtoon_name_label.configure(text="Анхаар: Бүтэн URL оруулна уу (https://...)", text_color="yellow")
-                return
-            
-            self.url_entry.delete(0, "end")
-            self.url_entry.insert(0, url)
-
-        is_webtoons = "webtoons.com" in url.lower()
-        self.webtoon_name_label.configure(text="Холбогдож байна...", text_color="white")
-        
-        def fetch():
-            try:
-                headers = {
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                    "Referer": "https://www.google.com/",
-                }
-                with httpx.Client(follow_redirects=True, timeout=10.0, headers=headers, cookies=self.cookies_for_url(url), verify=not self.should_skip_tls_verify(url)) as client:
-                    response = client.get(url)
-                    
-                    if response.status_code == 200:
-                        soup = BeautifulSoup(response.text, "lxml")
-                        title_tag = soup.find("meta", property="og:title")
-                        reader = soup.select_one("#nkBody[data-manga-title]")
-                        page_title = soup.find("title")
-                        if title_tag and title_tag.get("content"):
-                            title = title_tag["content"]
-                        elif reader and reader.get("data-manga-title"):
-                            title = reader["data-manga-title"]
-                        elif page_title:
-                            title = page_title.get_text(" ", strip=True)
-                        else:
-                            title = "Хуудас олдлоо"
-
-                        if "nebula.mn" in urlparse(url).netloc.lower():
-                            locked = soup.select_one("#nkLocked") is not None
-                            image_count = len(self.extract_reader_images(soup, url))
-                            access = "Crown session шаардлагатай" if locked else f"{image_count} зураг"
-                            title = f"{title}\n{access}"
-                        self.after(0, lambda t=title: self.webtoon_name_label.configure(text=f"Олдлоо: {t}", text_color=self.UCHIHA_RED))
-                    else:
-                        if self.should_use_direct_scraper(url) or self.is_webtoons_viewer_url(url):
-                            self.after(0, lambda: self.webtoon_name_label.configure(text="Direct scraper gorimoor tatah bolomjtoi", text_color="cyan"))
-                        elif not is_webtoons:
-                            # For other sites, verification might fail but gallery-dl might still work
-                            self.after(0, lambda: self.webtoon_name_label.configure(text="Universal горимоор татах боломжтой", text_color="cyan"))
-                        else:
-                            self.after(0, lambda: self.webtoon_name_label.configure(text=f"Алдаа: {response.status_code}", text_color="yellow"))
-            except Exception:
-                if self.should_use_direct_scraper(url) or self.is_webtoons_viewer_url(url):
-                    self.after(0, lambda: self.webtoon_name_label.configure(text="Direct scraper gorimoor tataj uzne", text_color="cyan"))
-                elif not is_webtoons:
-                    self.after(0, lambda: self.webtoon_name_label.configure(text="Universal горимоор татаж үзнэ үү", text_color="cyan"))
-                else:
-                    self.after(0, lambda: self.webtoon_name_label.configure(text="Алдаа: Хаяг буруу", text_color="yellow"))
-
-        threading.Thread(target=fetch, daemon=True).start()
 
 if __name__ == "__main__":
     app = WebtoonDownloaderGUI()
